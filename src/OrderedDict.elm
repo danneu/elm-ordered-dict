@@ -3,441 +3,399 @@ module OrderedDict
         ( OrderedDict
         , empty
         , singleton
-        , insert
-        , update
-        , remove
-        , isEmpty
-        , member
-        , get
-        , size
-        , keys
-        , values
-        , toList
         , fromList
-        , map
+        , toList
+        , toArray
+        , values
         , foldl
         , foldr
-        , filter
+        , map
+        , insertBefore
+        , insertAfter
+        , insertStart
+        , insertEnd
+        , remove
+        , isEmpty
+        , keys
+        , size
+        , member
         , partition
-        , union
-        , intersect
-        , diff
-        , merge
-        , compact
+        , filter
+        , get
+        , getBefore
+        , getAfter
+        , getAtIndex
+        , getIndex
+        , update
+        , slice
         )
 
-{-| An ordered dictionary is always iterated in insertion order
-and preserves that order when converted into other collections.
+{-| A dictionary with ordered keys. Useful for when you have sequential
+data and want the ergonomics of a Dict.
 
-Has the same API has Elm's core Dict type.
 
-- Inserting a new key puts it at the end.
-- Removing a key and then re-inserting it puts it at the end.
-- Updating the value of an existing key does not change its order.
+# OrderedDict
 
-# Insertion-Ordered Dictionaries
 @docs OrderedDict
 
+
 # Build
-@docs empty, singleton, insert, update, remove
+
+@docs empty, singleton, fromList
+
 
 # Query
-@docs isEmpty, member, get, size
 
-# Lists
-@docs keys, values, toList, fromList
+@docs member, get, getBefore, getAfter, getIndex, getAtIndex, isEmpty, size
+
+
+# Update
+
+@docs remove, insertStart, insertEnd, insertBefore, insertAfter, update, slice
+
 
 # Transform
-@docs map, foldl, foldr, filter, partition
 
-# Combine
-@docs union, intersect, diff, merge
-
-# Special
-@docs compact
+@docs toArray, toList, values, foldl, foldr, map, keys, partition, filter
 
 -}
 
+import Array.Extra
 import Array exposing (Array)
-import Debug
 import Dict exposing (Dict)
-import Set
+import Util
 
 
--- Private
-
-
-type alias OrderedDictRecord k v =
-    { items :
-        Dict k Int
-        -- maps items to index
-    , indexes :
-        Array (Maybe v)
-        -- tracks item ordering
-    }
-
-
-{-| The opaque set representation.
+{-| OrderedDict is a Dict with insertion order.
 -}
-type alias OrderedDict k v =
-    OrderedDictRecord k v
+type OrderedDict comparable v
+    = OrderedDict
+        { items : Dict comparable v
+        , keys : Array comparable
+        }
 
 
 
---
--- CREATE
---
+-- BUILD
 
 
 {-| Create an empty dict.
 -}
-empty : OrderedDict k v
+empty : OrderedDict comparable v
 empty =
-    { items = Dict.empty
-    , indexes = Array.empty
-    }
-
-
-{-| Create a dict with one pair.
--}
-singleton : comparable -> v -> OrderedDict comparable v
-singleton k v =
-    insert k v empty
-
-
-{-| Insert a pair.
-
-If key exists, the value is replaced without changing insertion order.
--}
-insert : comparable -> v -> OrderedDict comparable v -> OrderedDict comparable v
-insert k v dict =
-    if Dict.member k dict.items then
-        dict
-    else
-        { dict
-            | items = Dict.insert k (Array.length dict.indexes) dict.items
-            , indexes = Array.push (Just v) dict.indexes
+    OrderedDict
+        { items = Dict.empty
+        , keys = Array.empty
         }
 
 
-{-| Update the value of a key. If you return Nothing, the key is removed.
+{-| Create a dict with one key/value pair.
 -}
-update : comparable -> (Maybe v -> Maybe v) -> OrderedDict comparable v -> OrderedDict comparable v
-update k xform dict =
-    case Dict.get k dict.items of
-        -- Item not in dict
-        Nothing ->
-            case xform Nothing of
-                -- User wants to do nothing
-                Nothing ->
-                    dict
-
-                -- User wants to insert a value
-                Just next ->
-                    insert k next dict
-
-        -- Item in dict
-        Just index ->
-            case Array.get index dict.indexes of
-                -- Index out of range -- cannot happen
-                Nothing ->
-                    Debug.crash "Impossible"
-
-                -- Index in range
-                Just slot ->
-                    case slot of
-                        -- User is accessing a Nothing hole -- cannot happen
-                        Nothing ->
-                            Debug.crash "Impossible"
-
-                        -- User is accessing the previous value
-                        Just prev ->
-                            case xform (Just prev) of
-                                -- User wants to remove the pair
-                                Nothing ->
-                                    remove k dict
-
-                                -- User is replacing the pair with a new value
-                                Just next ->
-                                    { dict | indexes = Array.set index (Just next) dict.indexes }
+singleton : comparable -> v -> OrderedDict comparable v
+singleton k v =
+    OrderedDict
+        { items = Dict.singleton k v
+        , keys = Array.fromList [ k ]
+        }
 
 
-{-| Remove a pair.
--}
-remove : comparable -> OrderedDict comparable v -> OrderedDict comparable v
-remove k dict =
-    case Dict.get k dict.items of
-        Nothing ->
-            dict
-
-        Just index ->
-            { dict
-                | items = Dict.remove k dict.items
-                , indexes = Array.set index Nothing dict.indexes
-            }
-
-
-
---
--- QUERY
---
-
-
-{-| Check if a dict has no keys.
--}
-isEmpty : OrderedDict k v -> Bool
-isEmpty dict =
-    Dict.isEmpty dict.items
-
-
-{-| Check if a dict contains a key.
--}
-member : comparable -> OrderedDict comparable v -> Bool
-member k dict =
-    Dict.member k dict.items
-
-
-{-| Get value of key
--}
-get : comparable -> OrderedDict comparable v -> Maybe v
-get k dict =
-    case Dict.get k dict.items of
-        Nothing ->
-            Nothing
-
-        Just index ->
-            case Array.get index dict.indexes of
-                -- Index is out of bounds
-                Nothing ->
-                    Debug.crash "Impossible"
-
-                Just slot ->
-                    case slot of
-                        -- User is accessing a Nothing slot
-                        Nothing ->
-                            Debug.crash "Impossible"
-
-                        Just v ->
-                            Just v
-
-
-{-| Count the keys of a dict.
--}
-size : OrderedDict k v -> Int
-size dict =
-    Dict.size dict.items
-
-
-
---
--- LISTS
---
-
-
-{-| Get list of keys in insertion order.
--}
-keys : OrderedDict comparable v -> List comparable
-keys dict =
-    Dict.toList dict.items
-        |> List.sortBy Tuple.second
-        |> List.map Tuple.first
-
-
-{-| Get list of values in insertion order.
--}
-values : OrderedDict comparable v -> List v
-values dict =
-    keys dict
-        |> List.map (\k -> forceUnwrap (get k dict))
-
-
-{-| Get list of (key, value) tuples.
--}
-toList : OrderedDict comparable v -> List ( comparable, v )
-toList dict =
-    List.map2 (,) (keys dict) (values dict)
-
-
-{-| Create dict from list of (key, value) tuple.
+{-| Create a dict from a list of pairs.
 -}
 fromList : List ( comparable, v ) -> OrderedDict comparable v
-fromList list =
-    List.foldl (\( k, v ) memo -> insert k v memo) empty list
+fromList pairs =
+    List.foldl (\pair odict -> insertEnd pair odict) empty pairs
 
 
 
---
+-- QUERY
+
+
+{-| Check if dict has a given key.
+-}
+member : comparable -> OrderedDict comparable v -> Bool
+member key (OrderedDict { items }) =
+    Dict.member key items
+
+
+{-| Get value for given key.
+-}
+get : comparable -> OrderedDict comparable v -> Maybe v
+get key (OrderedDict { keys, items }) =
+    Dict.get key items
+
+
+getKeyAfter : comparable -> OrderedDict comparable v -> Maybe comparable
+getKeyAfter key ((OrderedDict { keys, items }) as odict) =
+    get key odict
+        |> Maybe.andThen (\_ -> Array.Extra.findFirstMatchIndex (\k -> k == key) keys)
+        |> Maybe.andThen (\index -> Array.get (index + 1) keys)
+
+
+{-| Get value of the key that comes after given key.
+-}
+getAfter : comparable -> OrderedDict comparable v -> Maybe v
+getAfter key ((OrderedDict { keys, items }) as odict) =
+    getKeyAfter key odict
+        |> Maybe.andThen (\after -> Dict.get after items)
+
+
+getKeyBefore : comparable -> OrderedDict comparable a -> Maybe comparable
+getKeyBefore key ((OrderedDict { keys, items }) as odict) =
+    get key odict
+        |> Maybe.andThen (\_ -> Array.Extra.findFirstMatchIndex (\k -> k == key) keys)
+        |> Maybe.andThen (\index -> Array.get (index - 1) keys)
+
+
+{-| Get value of the key that comes before given key.
+-}
+getBefore : comparable -> OrderedDict comparable a -> Maybe a
+getBefore key ((OrderedDict { keys, items }) as odict) =
+    getKeyBefore key odict
+        |> Maybe.andThen (\before -> Dict.get before items)
+
+
+{-| Get the index of a key.
+-}
+getIndex : comparable -> OrderedDict comparable v -> Maybe Int
+getIndex key ((OrderedDict { keys }) as odict) =
+    get key odict
+        |> Maybe.andThen (\_ -> Array.Extra.findFirstMatchIndex (\k -> k == key) keys)
+
+
+{-| Get the value at a given index.
+-}
+getAtIndex : Int -> OrderedDict comparable v -> Maybe v
+getAtIndex index (OrderedDict { items, keys }) =
+    keys
+        |> Array.get index
+        |> Maybe.andThen (\key -> Dict.get key items)
+
+
+{-| Check if a dict has no pairs.
+-}
+isEmpty : OrderedDict comparable v -> Bool
+isEmpty (OrderedDict { keys }) =
+    Array.isEmpty keys
+
+
+{-| Get the number of contained items.
+-}
+size : OrderedDict comparable v -> Int
+size (OrderedDict { keys }) =
+    Array.length keys
+
+
+
+-- UPDATE
+
+
+{-| Returns a sliced subset of the dict. The slice indexes are
+start-inclusive and end-exclusive.
+-}
+slice : Int -> Int -> OrderedDict comparable v -> OrderedDict comparable v
+slice start end (OrderedDict { items, keys }) =
+    let
+        ( keptKeys, lostKeys ) =
+            Array.Extra.partitionedSlice start end keys
+
+        -- Remove the keys that got sliced out
+        nextItems =
+            Array.foldl (\key acc -> Dict.remove key acc) items lostKeys
+    in
+        OrderedDict { items = nextItems, keys = keptKeys }
+
+
+{-| Remove a key from a dict.
+-}
+remove : comparable -> OrderedDict comparable v -> OrderedDict comparable v
+remove key ((OrderedDict { items, keys }) as odict) =
+    case Dict.get key items of
+        Nothing ->
+            odict
+
+        Just _ ->
+            OrderedDict
+                { items = Dict.remove key items
+                , keys = Array.filter (\k -> k /= key) keys
+                }
+
+
+{-| If insertion key already exists, then it is updated and moved.
+-}
+insertBefore : comparable -> ( comparable, v ) -> OrderedDict comparable v -> OrderedDict comparable v
+insertBefore marker ( key, value ) ((OrderedDict { items, keys }) as odict) =
+    let
+        nextItems =
+            Dict.insert key value items
+
+        nextKeys =
+            keys
+                |> Array.filter (\k -> k /= key)
+                |> Array.Extra.insertBeforeMatch (\k -> k == marker) key
+    in
+        OrderedDict { items = nextItems, keys = nextKeys }
+
+
+{-| If insertion key already exists, then it is updated and moved.
+-}
+insertAfter : comparable -> ( comparable, v ) -> OrderedDict comparable v -> OrderedDict comparable v
+insertAfter marker ( key, value ) ((OrderedDict { items, keys }) as odict) =
+    let
+        nextItems =
+            Dict.insert key value items
+
+        nextKeys =
+            keys
+                |> Array.filter (\k -> k /= key)
+                |> Array.Extra.insertAfterMatch (\k -> k == marker) key
+    in
+        OrderedDict { items = nextItems, keys = nextKeys }
+
+
+{-| Insert a pair at the start (left-hand side).
+-}
+insertStart : ( comparable, v ) -> OrderedDict comparable v -> OrderedDict comparable v
+insertStart ( key, value ) ((OrderedDict { items, keys }) as odict) =
+    let
+        nextItems =
+            Dict.insert key value items
+
+        nextKeys =
+            keys
+                |> Array.filter (\k -> k /= key)
+                |> Array.append (Array.fromList [ key ])
+    in
+        OrderedDict { items = nextItems, keys = nextKeys }
+
+
+{-| Insert a pair at the end (right-hand side).
+-}
+insertEnd : ( comparable, v ) -> OrderedDict comparable v -> OrderedDict comparable v
+insertEnd ( key, value ) ((OrderedDict { items, keys }) as odict) =
+    let
+        nextItems =
+            Dict.insert key value items
+
+        nextKeys =
+            keys
+                |> Array.filter (\k -> k /= key)
+                |> Array.push key
+    in
+        OrderedDict { items = nextItems, keys = nextKeys }
+
+
+{-| Transform an existing value. Returning `Nothing` will remove the existing key.
+-}
+update : comparable -> (Maybe v -> Maybe v) -> OrderedDict comparable v -> OrderedDict comparable v
+update key update ((OrderedDict ({ items, keys } as state)) as odict) =
+    case update (get key odict) of
+        Nothing ->
+            remove key odict
+
+        Just newValue ->
+            let
+                nextItems =
+                    Dict.insert key newValue state.items
+            in
+                OrderedDict { state | items = nextItems }
+
+
+
 -- TRANSFORM
---
 
 
-{-| Map a function over the pairs of a dict in insertion order,
-letting you update the value of each pair.
+{-| Get an array of pairs.
 -}
-map : (comparable -> v -> v2) -> OrderedDict comparable v -> OrderedDict comparable v2
-map xform =
-    fromList << List.map (\( k, v ) -> ( k, xform k v )) << toList
+toArray : OrderedDict comparable v -> Array ( comparable, v )
+toArray (OrderedDict { items, keys }) =
+    Array.map
+        (\k -> ( k, Util.unwrapMaybe (Dict.get k items) ))
+        keys
 
 
-{-| Reduce a dict in insertion order from the left
+{-| Get a list of pairs.
 -}
-foldl : (comparable -> v -> b -> b) -> b -> OrderedDict comparable v -> b
-foldl accum init dict =
-    List.foldl (\( k, v ) memo -> accum k v memo) init (toList dict)
+toList : OrderedDict comparable v -> List ( comparable, v )
+toList =
+    Array.toList << toArray
 
 
-{-| Reduce a dict in insertion order from the right
+{-| Get a list of keys.
 -}
-foldr : (comparable -> v -> b -> b) -> b -> OrderedDict comparable v -> b
-foldr accum init dict =
-    List.foldr (\( k, v ) memo -> accum k v memo) init (toList dict)
+keys : OrderedDict comparable v -> List comparable
+keys (OrderedDict { keys }) =
+    Array.toList keys
 
 
-{-| Keep the pairs that pass the predicate.
+{-| Get a list of values.
+-}
+values : OrderedDict comparable v -> List v
+values (OrderedDict { items, keys }) =
+    keys
+        |> Array.map (\k -> Util.unwrapMaybe (Dict.get k items))
+        |> Array.toList
+
+
+{-| Reduce a dict from the left.
+-}
+foldl : (a -> b -> b) -> b -> OrderedDict comparable a -> b
+foldl step init odict =
+    odict
+        |> values
+        |> List.foldl step init
+
+
+{-| Reduce a dict from the right.
+-}
+foldr : (a -> b -> b) -> b -> OrderedDict comparable a -> b
+foldr step init odict =
+    odict
+        |> values
+        |> List.foldr step init
+
+
+{-| Apply a function to all values in the dictionary.
+-}
+map : (comparable -> a -> b) -> OrderedDict comparable a -> OrderedDict comparable b
+map f (OrderedDict ({ items, keys } as state)) =
+    OrderedDict
+        { state | items = Dict.map f items }
+
+
+{-| Get a dict of pairs that satisfy a predicate.
 -}
 filter : (comparable -> v -> Bool) -> OrderedDict comparable v -> OrderedDict comparable v
-filter pred dict =
-    let
-        accum k v memo =
-            if pred k v then
-                insert k v memo
-            else
-                memo
-    in
-        foldl accum empty dict
+filter predicate (OrderedDict { items, keys }) =
+    Array.foldl
+        (\k acc ->
+            let
+                v =
+                    Util.unwrapMaybe (Dict.get k items)
+            in
+                if predicate k v then
+                    insertEnd ( k, v ) acc
+                else
+                    acc
+        )
+        empty
+        keys
 
 
-{-| Apply a predicate to each pair,
-returning a tuple of dicts (pairsThatPass, pairsThatFail).
+{-| The left dict contains pairs that satisfied the predicate, the right dict contains
+pairs that failed the predicate.
 -}
 partition : (comparable -> v -> Bool) -> OrderedDict comparable v -> ( OrderedDict comparable v, OrderedDict comparable v )
-partition pred dict =
-    let
-        accum k v ( yes, no ) =
-            if pred k v then
-                ( insert k v yes, no )
-            else
-                ( yes, insert k v no )
-    in
-        foldl accum ( empty, empty ) dict
-
-
-
---
--- COMBINE
---
-
-
-{-| Merge the left dictionary into the right dictionary.
-
-If there are collisions, the left value is used.
--}
-union : OrderedDict comparable v -> OrderedDict comparable v -> OrderedDict comparable v
-union left right =
-    foldl insert right left
-
-
-{-| Keep pairs in the left dictionary when their key appears
-in the right dictionary.
--}
-intersect : OrderedDict comparable v -> OrderedDict comparable v -> OrderedDict comparable v
-intersect left right =
-    filter (\k v -> member k right) left
-
-
-{-| Keep pairs in the left dictionary when their key does not
-appear in the right dictionary.
--}
-diff : OrderedDict comparable v -> OrderedDict comparable v -> OrderedDict comparable v
-diff left right =
-    filter (\k v -> not (member k right)) left
-
-
-{-| The most general way of combining two dictionaries.
-
-You provide three accumulators for when a given key appears:
-
-1. Only in the left dictionary.
-2. In both dictionaries.
-3. Only in the right dictionary.
-
-The keys are traversed in the insertion order of the left dictionary
-and then the right dictionary.
--}
-merge :
-    (comparable -> a -> result -> result)
-    -> (comparable -> a -> b -> result -> result)
-    -> (comparable -> b -> result -> result)
-    -> OrderedDict comparable a
-    -> OrderedDict comparable b
-    -> result
-    -> result
-merge accumLeft accumBoth accumRight left right init =
-    let
-        allKeys =
-            unique (List.concat [ (keys left), (keys right) ])
-
-        accum k result =
-            case ( get k left, get k right ) of
-                ( Just v1, Nothing ) ->
-                    accumLeft k v1 result
-
-                ( Just v1, Just v2 ) ->
-                    accumBoth k v1 v2 result
-
-                ( Nothing, Just v2 ) ->
-                    accumRight k v2 result
-
-                ( Nothing, Nothing ) ->
-                    Debug.crash "Impossible"
-    in
-        List.foldl accum init allKeys
-
-
-
---
--- SPECIAL
---
-
-
-{-| Clean up the internal datastructure.
-
-As `remove` is called on a dict, holes are left behind
-in the underlying datastructure. It's possible to have unbounded
-memory growth in the rare case where you call `remove` a substantial
-amount of times over a long period of time on a single dict without
-calling any of the functions on it that return a new dict (thus
-resetting the holes).
--}
-compact : OrderedDict comparable v -> OrderedDict comparable v
-compact dict =
-    foldl insert empty dict
-
-
-
---
--- PRIVATE HELPERS
---
-{- Keeps the first occurrence of each value. -}
-
-
-unique : List comparable -> List comparable
-unique list =
-    let
-        accum v ( seen, memo ) =
-            if Set.member v seen then
-                ( seen, memo )
-            else
-                ( Set.insert v seen, List.append memo [ v ] )
-    in
-        Tuple.second <| List.foldl accum ( Set.empty, [] ) list
-
-
-forceUnwrap : Maybe a -> a
-forceUnwrap maybe =
-    case maybe of
-        Just val ->
-            val
-
-        Nothing ->
-            Debug.crash "Impossible"
+partition predicate (OrderedDict { items, keys }) =
+    Array.foldl
+        (\k ( pass, fail ) ->
+            let
+                v =
+                    Util.unwrapMaybe (Dict.get k items)
+            in
+                if predicate k v then
+                    ( insertEnd ( k, v ) pass, fail )
+                else
+                    ( pass, insertEnd ( k, v ) fail )
+        )
+        ( empty, empty )
+        keys
